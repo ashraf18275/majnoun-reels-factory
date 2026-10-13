@@ -215,8 +215,9 @@ def render_video(script_path, title, output_dir):
     if not model_path.is_file():
         raise VideoRenderError(f"نموذج الصوت العربي Piper غير موجود: {model_path}")
     try:
-        from piper import PiperVoice
+        from piper import PiperVoice, SynthesisConfig
         voice = PiperVoice.load(str(model_path))
+        speech_config = SynthesisConfig(length_scale=0.82)
     except Exception as error:
         raise VideoRenderError(f"تعذر تحميل الصوت العصبي العربي Piper: {error}") from None
     print(f"حُمّل الصوت العصبي العربي؛ سيتم توليد {len(segments)} مقاطع صوتية.", flush=True)
@@ -230,7 +231,7 @@ def render_video(script_path, title, output_dir):
         wav_path = output_dir / f"speech-{number:03}.wav"
         try:
             with wave.open(str(wav_path), "wb") as wav_file:
-                voice.synthesize_wav(segment, wav_file)
+                voice.synthesize_wav(segment, wav_file, syn_config=speech_config)
         except Exception as error:
             raise VideoRenderError(f"فشل توليد الصوت العربي للمقطع {number}: {error}") from None
         params, frames = _read_wave(wav_path)
