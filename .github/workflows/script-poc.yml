@@ -1,0 +1,61 @@
+name: Script generation proof of concept
+
+on:
+  workflow_dispatch:
+    inputs:
+      title:
+        description: عنوان الفكرة
+        required: true
+        type: string
+      source_notes:
+        description: مقتطفات موثوقة أو روابط للمراجعة
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  generate-draft:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out project
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Ollama and load the open model
+        shell: bash
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          ollama serve > "$RUNNER_TEMP/ollama.log" 2>&1 &
+          for attempt in {1..60}; do
+            if curl --silent --fail http://127.0.0.1:11434/api/tags > /dev/null; then
+              break
+            fi
+            sleep 2
+          done
+          curl --silent --fail http://127.0.0.1:11434/api/tags > /dev/null || {
+            echo "Ollama did not become ready." >&2
+            exit 1
+          }
+          ollama pull qwen2.5:1.5b
+
+      - name: Generate Arabic draft
+        env:
+          VIDEO_TITLE: ${{ inputs.title }}
+          SOURCE_NOTES: ${{ inputs.source_notes }}
+          OLLAMA_MODEL: qwen2.5:1.5b
+        run: python factory/run_script_poc.py
+
+      - name: Save draft for review
+        uses: actions/upload-artifact@v4
+        with:
+          name: script-draft
+          path: output/script-draft.md
+          if-no-files-found: error
+          retention-days: 7
