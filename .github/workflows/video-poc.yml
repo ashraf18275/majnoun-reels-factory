@@ -1,0 +1,83 @@
+name: Idea to video proof of concept
+
+on:
+  workflow_dispatch:
+    inputs:
+      title:
+        description: عنوان الفكرة
+        required: true
+        type: string
+      source_notes:
+        description: مقتطفات موثوقة أو روابط للمراجعة
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  generate-video:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out project
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install video and Arabic speech tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ffmpeg espeak-ng fonts-noto-core
+          espeak-ng --voices | awk '$2 == "ar" { found=1 } END { exit !found }' || {
+            echo "Arabic speech voice is unavailable in eSpeak NG." >&2
+            exit 1
+          }
+          ffmpeg -hide_banner -filters | grep -q subtitles || {
+            echo "This FFmpeg build does not include subtitle rendering." >&2
+            exit 1
+          }
+
+      - name: Install Python image tools
+        run: python -m pip install --disable-pip-version-check Pillow
+
+      - name: Install Ollama and load the open model
+        shell: bash
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          ollama serve > "$RUNNER_TEMP/ollama.log" 2>&1 &
+          for attempt in {1..60}; do
+            if curl --silent --fail http://127.0.0.1:11434/api/tags > /dev/null; then
+              break
+            fi
+            sleep 2
+          done
+          curl --silent --fail http://127.0.0.1:11434/api/tags > /dev/null || {
+            echo "Ollama did not become ready." >&2
+            exit 1
+          }
+          ollama pull qwen2.5:1.5b
+
+      - name: Generate the sourced Arabic script and render the video
+        env:
+          VIDEO_TITLE: ${{ inputs.title }}
+          SOURCE_NOTES: ${{ inputs.source_notes }}
+          OLLAMA_MODEL: qwen2.5:1.5b
+        run: python -m factory.run_video_poc
+
+      - name: Save the video package for review
+        uses: actions/upload-artifact@v4
+        with:
+          name: video-package
+          path: |
+            output/video.mp4
+            output/script-draft.md
+            output/narration.txt
+            output/narration.wav
+            output/subtitles.srt
+            output/background.png
+          if-no-files-found: error
+          retention-days: 7
