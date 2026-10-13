@@ -24,7 +24,7 @@ def generate_script(title, source_notes, *, model="qwen2.5:1.5b", base_url="http
 {source_notes}
 
 قواعد التحرير:
-- اجعل نص الإلقاء نفسه بين 80 و100 كلمة عربية، ولا تتجاوز 100 كلمة قبل قسم المصادر.
+- اجعل نص الإلقاء نفسه بين 75 و90 كلمة عربية، ولا تتجاوز 90 كلمة قبل قسم المصادر.
 - اختصر إلى الفكرة الأهم فقط؛ جمل قصيرة ومباشرة تناسب ريلز مدته دقيقة.
 - ابنِ النص على المعلومات المقدمة فقط، ولا تخترع حقائق أو أرقامًا أو مراجع.
 - ابدأ بخطاف موجز، ثم اشرح الفكرة بوضوح، واختم بسؤال أو خلاصة.
@@ -38,7 +38,7 @@ def generate_script(title, source_notes, *, model="qwen2.5:1.5b", base_url="http
             "model": model,
             "prompt": prompt,
             "stream": False,
-            "options": {"num_predict": 320},
+            "options": {"num_predict": 240},
         }, ensure_ascii=False).encode("utf-8"),
         headers={"Content-Type": "application/json"},
         method="POST",
