@@ -40,6 +40,7 @@ jobs:
           export OLLAMA_MODELS="$RUNNER_TEMP/ollama-models"
           mkdir -p "$OLLAMA_MODELS"
           curl -fsSL https://ollama.com/install.sh | sh
+          sudo systemctl stop ollama.service || true
           ollama serve > "$RUNNER_TEMP/ollama.log" 2>&1 &
           for attempt in {1..60}; do
             if curl --silent --fail http://127.0.0.1:11434/api/tags > /dev/null; then
