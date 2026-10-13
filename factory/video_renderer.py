@@ -1,4 +1,4 @@
-"""Render a narrated, vertically framed video from a generated Arabic script."""
+"""Create a narrated Arabic explainer with neural speech and animated scenes."""
 
 import json
 import re
@@ -6,7 +6,7 @@ import subprocess
 import wave
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 
 class VideoRenderError(RuntimeError):
@@ -15,10 +15,11 @@ class VideoRenderError(RuntimeError):
 
 INTRO_SECONDS = 1.8
 OUTRO_SECONDS = 2.0
-PAUSE_SECONDS = 0.28
+PAUSE_SECONDS = 0.18
 WIDTH = 720
 HEIGHT = 1280
 FPS = 30
+SCENE_COUNT = 5
 
 
 def extract_narration(markdown):
@@ -32,7 +33,7 @@ def extract_narration(markdown):
             break
         if stripped.startswith("``` ") or stripped == "```":
             continue
-        if stripped.startswith("- ") or stripped.startswith("* "):
+        if stripped.startswith(("- ", "* ")):
             stripped = stripped[2:].strip()
         if stripped:
             lines.append(stripped)
@@ -42,9 +43,9 @@ def extract_narration(markdown):
     return narration
 
 
-def split_segments(text, max_chars=68):
-    """Split the narration into caption-sized phrases without discarding words."""
-    sentences = [part.strip() for part in re.split(r"(?<=[.!?؟؛،])\s+|\n+", text) if part.strip()]
+def split_segments(text, max_chars=115):
+    """Split narration into sentence-sized chunks to preserve natural prosody."""
+    sentences = [part.strip() for part in re.split(r"(?<=[.!?؟؛])\s+|\n+", text) if part.strip()]
     segments = []
     for sentence in sentences:
         words = sentence.split()
@@ -65,26 +66,18 @@ def split_segments(text, max_chars=68):
 
 def _run(command, *, input_text=None, step_name):
     try:
-        result = subprocess.run(
-            command,
-            input=input_text,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
+        result = subprocess.run(command, input=input_text, text=True, capture_output=True, check=False)
     except FileNotFoundError as error:
         raise VideoRenderError(f"الأداة المطلوبة غير مثبتة لإتمام خطوة {step_name}: {error.filename}") from None
     if result.returncode:
         detail = (result.stderr or result.stdout or "").strip().splitlines()
-        detail = "\n".join(detail[-12:])
-        raise VideoRenderError(f"فشلت خطوة {step_name} (رمز {result.returncode}).\n{detail}")
+        raise VideoRenderError(f"فشلت خطوة {step_name} (رمز {result.returncode}).\n" + "\n".join(detail[-12:]))
     return result
 
 
 def _read_wave(path):
     with wave.open(str(path), "rb") as source:
-        params = source.getparams()
-        frames = source.readframes(source.getnframes())
+        params, frames = source.getparams(), source.readframes(source.getnframes())
     if params.nchannels != 1 or params.sampwidth != 2:
         raise VideoRenderError("أعاد مولد الصوت تنسيق WAV غير متوقع.")
     return params, frames
@@ -99,8 +92,7 @@ def _format_srt_time(seconds):
 
 
 def _wrap_caption(text, max_chars=38):
-    lines = []
-    current = ""
+    lines, current = [], ""
     for word in text.split():
         candidate = f"{current} {word}".strip()
         if current and len(candidate) > max_chars:
@@ -113,30 +105,102 @@ def _wrap_caption(text, max_chars=38):
     return "\n".join(lines)
 
 
-def _make_background(path):
-    """Create a lightweight original science-themed backdrop without stock media."""
+def _font(size, bold=False):
+    candidates = [
+        "/usr/share/fonts/truetype/noto/NotoSansArabic-Bold.ttf" if bold else "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ]
+    for candidate in candidates:
+        if Path(candidate).exists():
+            return ImageFont.truetype(candidate, size)
+    return ImageFont.load_default()
+
+
+def _topic_title(text, index):
+    patterns = [
+        (r"الشمس|ضوء|الضوء", "رحلة الضوء"),
+        (r"موج|طول موجي|الأطوال الموجية", "ألوان بأطوال مختلفة"),
+        (r"جزيئ|جزيئات|ذرات|غلاف جوي|الهواء", "ما يحدث في الغلاف الجوي"),
+        (r"تبعثر|تشتت|ينتشر|يتشتت", "لماذا يتبعثر الضوء؟"),
+        (r"سماء|أزرق|السماء", "سر زرقة السماء"),
+    ]
+    for pattern, heading in patterns:
+        if re.search(pattern, text):
+            return heading
+    return ["السؤال العلمي", "الفكرة الأساسية", "كيف يحدث ذلك؟", "ما الذي تكشفه الأدلة؟", "الخلاصة العلمية"][index]
+
+
+def _draw_scene(path, title, index, topic):
+    """Paint a distinct infographic scene; FFmpeg then animates its camera move."""
     image = Image.new("RGB", (WIDTH, HEIGHT))
     pixels = image.load()
-    top = (5, 20, 43)
-    bottom = (10, 65, 91)
+    top, bottom = (7, 17, 43), (13, 57, 83)
     for y in range(HEIGHT):
-        blend = y / (HEIGHT - 1)
-        color = tuple(round(top[c] * (1 - blend) + bottom[c] * blend) for c in range(3))
+        t = y / (HEIGHT - 1)
+        color = tuple(round(top[c] * (1 - t) + bottom[c] * t) for c in range(3))
         for x in range(WIDTH):
             pixels[x, y] = color
-
     draw = ImageDraw.Draw(image, "RGBA")
-    draw.ellipse((116, 190, 604, 678), outline=(110, 210, 235, 70), width=3)
-    draw.ellipse((164, 238, 556, 630), outline=(110, 210, 235, 45), width=2)
-    draw.ellipse((205, 280, 515, 590), fill=(33, 112, 150, 80), outline=(125, 225, 238, 100), width=3)
-    draw.ellipse((278, 340, 442, 504), fill=(81, 176, 192, 45), outline=(195, 244, 242, 100), width=2)
-    for x, y, radius, alpha in [
-        (92, 155, 4, 150), (615, 230, 5, 125), (95, 770, 3, 130),
-        (622, 880, 4, 140), (138, 1015, 3, 120), (570, 1080, 5, 110),
-        (500, 145, 3, 140), (205, 870, 4, 90), (548, 720, 3, 120),
-    ]:
-        draw.ellipse((x-radius, y-radius, x+radius, y+radius), fill=(211, 247, 255, alpha))
-    image.save(path, format="PNG", optimize=True)
+    accent = [(255, 190, 74), (72, 206, 255), (143, 255, 203), (255, 114, 149), (184, 154, 255)][index]
+    draw.rounded_rectangle((42, 82, 678, 132), radius=22, fill=(255, 255, 255, 18), outline=(*accent, 180), width=2)
+    draw.text((360, 107), f"مجنون علم  •  {index + 1:02}", font=_font(23, True), fill=(229, 244, 255), anchor="mm", direction="rtl")
+    draw.text((360, 250), title, font=_font(39, True), fill=(255, 255, 255), anchor="mm", direction="rtl", stroke_width=1, stroke_fill=(2, 11, 30))
+    # A layered illustrated centerpiece makes each chapter visually distinct.
+    cx, cy = 360, 605
+    if re.search(r"شمس|ضوء|السماء|أزرق|موج|غلاف جوي|هواء", topic):
+        if index == 0:
+            for radius in (190, 150, 112):
+                draw.ellipse((cx-radius, cy-radius, cx+radius, cy+radius), outline=(*accent, 65), width=4)
+            draw.ellipse((cx-78, cy-78, cx+78, cy+78), fill=(255, 191, 66, 235))
+            for angle in range(0, 360, 30):
+                import math
+                a = math.radians(angle)
+                draw.line((cx+92*math.cos(a), cy+92*math.sin(a), cx+142*math.cos(a), cy+142*math.sin(a)), fill=(255, 214, 115, 210), width=7)
+        elif index == 1:
+            for j, color in enumerate(((255, 85, 90), (255, 161, 80), (255, 224, 89), (113, 236, 152), (82, 188, 255), (119, 120, 255))):
+                y = cy - 150 + j * 58
+                points = [(80, y)]
+                for x in range(80, 660, 8):
+                    import math
+                    points.append((x, y + 19 * math.sin((x - 80) / (45 + j * 12))))
+                draw.line(points, fill=(*color, 220), width=5)
+        elif index in (2, 3):
+            for x, y, r in ((235, 530, 45), (460, 500, 35), (335, 700, 50), (500, 740, 26), (205, 760, 24), (360, 570, 17)):
+                draw.ellipse((x-r, y-r, x+r, y+r), fill=(*accent, 38), outline=(*accent, 215), width=4)
+            draw.line((235,530,360,570,460,500,500,740,335,700,205,760), fill=(211, 242, 255, 125), width=4)
+            for j in range(5):
+                y = 450 + j * 72
+                draw.line((80, y, 640, y-75), fill=(96, 202, 255, 85), width=3)
+        else:
+            draw.rectangle((70, 680, 650, 900), fill=(13, 111, 164, 130))
+            draw.ellipse((75, 320, 645, 890), outline=(98, 207, 255, 190), width=10)
+            draw.ellipse((280, 375, 440, 535), fill=(255, 196, 76, 240))
+            for j, x in enumerate((180, 270, 390, 510)):
+                draw.ellipse((x-15, 650-j*35, x+15, 680-j*35), fill=(148, 224, 255, 220))
+    else:
+        for r in (205, 160, 110):
+            draw.ellipse((cx-r, cy-r, cx+r, cy+r), outline=(*accent, 90 + r//4), width=5)
+        draw.ellipse((cx-54, cy-54, cx+54, cy+54), fill=(*accent, 205))
+        for x, y in ((205, 510), (490, 550), (245, 730), (460, 750), (360, 385)):
+            draw.ellipse((x-17, y-17, x+17, y+17), fill=(227, 249, 255, 240))
+            draw.line((cx, cy, x, y), fill=(*accent, 150), width=3)
+    draw.rounded_rectangle((48, 1010, 672, 1125), radius=26, fill=(1, 12, 30, 130), outline=(*accent, 110), width=2)
+    draw.text((360, 1068), "معلومة • دليل • تفسير", font=_font(27, True), fill=(232, 246, 255), anchor="mm", direction="rtl")
+    image.save(path, "PNG", optimize=True)
+
+
+def _make_storyboard(output_dir, narration):
+    segments = split_segments(narration)
+    groups = [[] for _ in range(SCENE_COUNT)]
+    for index, segment in enumerate(segments):
+        groups[min(SCENE_COUNT - 1, index * SCENE_COUNT // len(segments))].append(segment)
+    scenes = []
+    for index, group in enumerate(groups):
+        source = " ".join(group) or narration
+        image_path = output_dir / f"scene-{index + 1:02}.png"
+        _draw_scene(image_path, _topic_title(source, index), index, narration)
+        scenes.append((image_path, sum(len(part.split()) for part in group)))
+    return scenes
 
 
 def render_video(script_path, title, output_dir):
@@ -145,107 +209,104 @@ def render_video(script_path, title, output_dir):
     script_path = Path(script_path)
     if not script_path.is_file():
         raise VideoRenderError(f"ملف المسودة غير موجود: {script_path}")
-
     narration = extract_narration(script_path.read_text(encoding="utf-8"))
     segments = split_segments(narration)
-    print(f"تم استخراج نص الإلقاء وتقسيمه إلى {len(segments)} مقاطع.", flush=True)
+    model_path = Path(__import__("os").environ.get("PIPER_MODEL", "models/ar_JO-kareem-medium.onnx"))
+    if not model_path.is_file():
+        raise VideoRenderError(f"نموذج الصوت العربي Piper غير موجود: {model_path}")
+    try:
+        from piper import PiperVoice
+        voice = PiperVoice.load(str(model_path))
+    except Exception as error:
+        raise VideoRenderError(f"تعذر تحميل الصوت العصبي العربي Piper: {error}") from None
+    print(f"حُمّل الصوت العصبي العربي؛ سيتم توليد {len(segments)} مقاطع صوتية.", flush=True)
 
-    audio_dir = output_dir / "audio_segments"
-    audio_dir.mkdir(exist_ok=True)
-    audio_parts = []
-    captions = []
+    audio_parts, captions = [], []
     cursor = INTRO_SECONDS
-    sample_rate = None
-    sample_width = None
-
+    sample_rate = voice.config.sample_rate
+    silence = b"\x00" * round(PAUSE_SECONDS * sample_rate) * 2
     for number, segment in enumerate(segments, start=1):
-        print(f"توليد الصوت: المقطع {number}/{len(segments)}.", flush=True)
-        wav_path = audio_dir / f"segment-{number:03}.wav"
-        _run(
-            ["espeak-ng", "-v", "ar", "-s", "145", "-w", str(wav_path), "--stdin"],
-            input_text=segment,
-            step_name=f"توليد الصوت العربي للمقطع {number}",
-        )
+        print(f"توليد الصوت العصبي: المقطع {number}/{len(segments)}.", flush=True)
+        wav_path = output_dir / f"speech-{number:03}.wav"
+        try:
+            with wave.open(str(wav_path), "wb") as wav_file:
+                voice.synthesize_wav(segment, wav_file)
+        except Exception as error:
+            raise VideoRenderError(f"فشل توليد الصوت العربي للمقطع {number}: {error}") from None
         params, frames = _read_wave(wav_path)
-        sample_rate = sample_rate or params.framerate
-        sample_width = sample_width or params.sampwidth
-        if params.framerate != sample_rate or params.sampwidth != sample_width:
-            raise VideoRenderError("تغيّر تنسيق الصوت بين المقاطع؛ لا يمكن دمجها بأمان.")
-        duration = len(frames) / (params.framerate * params.nchannels * params.sampwidth)
+        if params.framerate != sample_rate:
+            raise VideoRenderError("تغير معدل أخذ العينات في الصوت العربي بين المقاطع.")
+        duration = len(frames) / (sample_rate * params.nchannels * params.sampwidth)
         if duration <= 0:
             raise VideoRenderError(f"المقطع الصوتي {number} فارغ.")
         captions.append((cursor, cursor + duration, _wrap_caption(segment)))
         audio_parts.append(frames)
         cursor += duration
         if number < len(segments):
-            pause_frames = round(PAUSE_SECONDS * params.framerate)
-            audio_parts.append(b"\x00" * pause_frames * params.nchannels * params.sampwidth)
+            audio_parts.append(silence)
             cursor += PAUSE_SECONDS
 
-    params, _ = _read_wave(audio_dir / "segment-001.wav")
-    intro_frames = round(INTRO_SECONDS * params.framerate)
-    outro_frames = round(OUTRO_SECONDS * params.framerate)
     full_audio = output_dir / "narration.wav"
-    with wave.open(str(full_audio), "wb") as destination:
-        destination.setnchannels(params.nchannels)
-        destination.setsampwidth(params.sampwidth)
-        destination.setframerate(params.framerate)
-        destination.writeframes(b"\x00" * intro_frames * params.nchannels * params.sampwidth)
+    with wave.open(str(full_audio), "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(b"\x00" * round(INTRO_SECONDS * sample_rate) * 2)
         for frames in audio_parts:
-            destination.writeframes(frames)
-        destination.writeframes(b"\x00" * outro_frames * params.nchannels * params.sampwidth)
-
-    narration_path = output_dir / "narration.txt"
-    narration_path.write_text(narration, encoding="utf-8")
+            wav_file.writeframes(frames)
+        wav_file.writeframes(b"\x00" * round(OUTRO_SECONDS * sample_rate) * 2)
+    (output_dir / "narration.txt").write_text(narration, encoding="utf-8")
 
     srt_path = output_dir / "subtitles.srt"
     cues = [(0.15, INTRO_SECONDS - 0.1, _wrap_caption(title))]
     cues.extend((start, end + 0.12, text) for start, end, text in captions)
-    outro_start = cursor + 0.15
-    cues.append((outro_start, outro_start + OUTRO_SECONDS - 0.25, "حقيقة علمية جديدة في كل فيديو"))
+    cues.append((cursor + 0.15, cursor + OUTRO_SECONDS - 0.1, "حقيقة علمية جديدة في كل فيديو"))
     with srt_path.open("w", encoding="utf-8", newline="\n") as destination:
         for index, (start, end, text) in enumerate(cues, start=1):
-            destination.write(
-                f"{index}\n{_format_srt_time(start)} --> {_format_srt_time(end)}\n{text}\n\n"
-            )
+            destination.write(f"{index}\n{_format_srt_time(start)} --> {_format_srt_time(end)}\n{text}\n\n")
 
-    background = output_dir / "background.png"
-    _make_background(background)
+    print("رسم خمس مشاهد علمية مختلفة وتحريك انتقال الكاميرا بينها.", flush=True)
+    scenes = _make_storyboard(output_dir, narration)
+    total_words = sum(count for _, count in scenes) or 1
+    spoken_duration = max(1.0, cursor - INTRO_SECONDS)
+    clip_paths = []
+    for index, (image_path, word_count) in enumerate(scenes):
+        duration = spoken_duration * word_count / total_words if word_count else spoken_duration / SCENE_COUNT
+        duration = max(1.5, duration)
+        clip_path = output_dir / f"scene-video-{index + 1:02}.mp4"
+        zoom = "min(zoom+0.00035,1.07)" if index % 2 == 0 else "max(zoom-0.00025,1.0)"
+        _run([
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-loop", "1", "-framerate", str(FPS),
+            "-i", str(image_path), "-vf", f"zoompan=z='{zoom}':d=1:s={WIDTH}x{HEIGHT}:fps={FPS},trim=duration={duration:.3f},setpts=PTS-STARTPTS",
+            "-an", "-c:v", "libx264", "-preset", "ultrafast", "-tune", "stillimage", "-crf", "24", "-pix_fmt", "yuv420p",
+            "-r", str(FPS), "-movflags", "+faststart", str(clip_path),
+        ], step_name=f"تحريك المشهد {index + 1}")
+        clip_paths.append(clip_path)
+    concat_file = output_dir / "scenes.txt"
+    concat_file.write_text("".join(f"file '{path.resolve().as_posix()}'\n" for path in clip_paths), encoding="utf-8")
+    joined = output_dir / "storyboard.mp4"
+    _run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_file), "-c", "copy", str(joined)], step_name="دمج المشاهد المتحركة")
+
     video_path = output_dir / "video.mp4"
     subtitle_filter = (
         f"subtitles={srt_path}:fontsdir=/usr/share/fonts/truetype/noto:"
         "force_style='FontName=Noto Sans Arabic,FontSize=25,PrimaryColour=&H00FFFFFF,"
         "OutlineColour=&H00101A2A,BorderStyle=1,Outline=3,Shadow=1,Alignment=2,MarginV=128'"
     )
-    print("تركيب الخلفية والشرح المكتوب والصوت في فيديو رأسي.", flush=True)
-    _run(
-        [
-            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-            "-loop", "1", "-framerate", str(FPS), "-i", str(background),
-            "-i", str(full_audio), "-vf", subtitle_filter,
-            "-c:v", "libx264", "-preset", "ultrafast", "-tune", "stillimage",
-            "-crf", "25", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
-            "-shortest", "-movflags", "+faststart", str(video_path),
-        ],
-        step_name="تركيب الفيديو عبر FFmpeg",
-    )
-    probe = _run(
-        [
-            "ffprobe", "-v", "error", "-show_entries", "stream=codec_name,codec_type,width,height",
-            "-of", "json", str(video_path),
-        ],
-        step_name="فحص ملف الفيديو الناتج",
-    )
+    print("إضافة الترجمة والصوت إلى تسلسل المشاهد.", flush=True)
+    _run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(joined), "-i", str(full_audio),
+          "-vf", subtitle_filter, "-af", "loudnorm=I=-16:TP=-1.5:LRA=11", "-c:v", "libx264", "-preset", "ultrafast",
+          "-crf", "24", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k", "-shortest", "-movflags", "+faststart", str(video_path)],
+         step_name="تركيب الفيديو والصوت")
+    probe = _run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_name,codec_type,width,height", "-of", "json", str(video_path)], step_name="فحص ملف الفيديو الناتج")
     try:
         streams = json.loads(probe.stdout).get("streams", [])
-        video_stream = next(stream for stream in streams if stream.get("codec_type") == "video")
-        audio_stream = next(stream for stream in streams if stream.get("codec_type") == "audio")
+        video = next(stream for stream in streams if stream.get("codec_type") == "video")
+        audio = next(stream for stream in streams if stream.get("codec_type") == "audio")
     except (ValueError, StopIteration):
         raise VideoRenderError("لم أتمكن من التحقق من مساري الفيديو والصوت في الملف الناتج.") from None
-    if (video_stream.get("width"), video_stream.get("height")) != (WIDTH, HEIGHT):
-        raise VideoRenderError("أبعاد الفيديو الناتج ليست 9:16 كما هو مطلوب.")
-    if video_stream.get("codec_name") != "h264" or audio_stream.get("codec_name") != "aac":
-        raise VideoRenderError("ترميز الفيديو أو الصوت الناتج غير متوافق مع إعداد التصدير.")
-
-    print(f"اكتمل الفيديو: {video_path} ({WIDTH}×{HEIGHT}، H.264/AAC).", flush=True)
+    if (video.get("width"), video.get("height"), video.get("codec_name"), audio.get("codec_name")) != (WIDTH, HEIGHT, "h264", "aac"):
+        raise VideoRenderError("الأبعاد أو ترميز الصوت والفيديو الناتج لا يطابق إعداد التصدير.")
+    print(f"اكتمل الفيديو: {video_path} ({WIDTH}×{HEIGHT}، خمسة مشاهد، H.264/AAC).", flush=True)
     return video_path
+
