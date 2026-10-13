@@ -50,7 +50,7 @@ jobs:
           VIDEO_TITLE: ${{ inputs.title }}
           SOURCE_NOTES: ${{ inputs.source_notes }}
           OLLAMA_MODEL: qwen2.5:1.5b
-        run: python factory/run_script_poc.py
+        run: python -m factory.run_script_poc
 
       - name: Save draft for review
         uses: actions/upload-artifact@v4
