@@ -28,21 +28,28 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install video and Arabic speech tools
+      - name: Install video and typography tools
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends ffmpeg espeak-ng fonts-noto-core
-          espeak-ng --voices | awk '$2 == "ar" { found=1 } END { exit !found }' || {
-            echo "Arabic speech voice is unavailable in eSpeak NG." >&2
-            exit 1
-          }
+          sudo apt-get install --yes --no-install-recommends ffmpeg fonts-noto-core
           ffmpeg -hide_banner -filters | grep -q subtitles || {
             echo "This FFmpeg build does not include subtitle rendering." >&2
             exit 1
           }
 
-      - name: Install Python image tools
-        run: python -m pip install --disable-pip-version-check Pillow
+      - name: Install neural speech and image tools
+        run: python -m pip install --disable-pip-version-check Pillow piper-tts
+
+      - name: Cache Arabic neural voice
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/piper-voices
+          key: piper-ar-JO-kareem-medium-v1
+
+      - name: Prepare Arabic neural voice
+        run: |
+          mkdir -p "$RUNNER_TEMP/piper-voices"
+          python -m piper.download_voices --download-dir "$RUNNER_TEMP/piper-voices" ar_JO-kareem-medium
 
       - name: Cache Ollama model
         uses: actions/cache@v5
@@ -76,6 +83,7 @@ jobs:
           SOURCE_NOTES: ${{ inputs.source_notes }}
           OLLAMA_MODEL: qwen2.5:1.5b
           OLLAMA_MODELS: ${{ runner.temp }}/ollama-models
+          PIPER_MODEL: ${{ runner.temp }}/piper-voices/ar_JO-kareem-medium.onnx
         run: python -m factory.run_video_poc
 
       - name: Save the video package for review
@@ -88,6 +96,8 @@ jobs:
             output/narration.txt
             output/narration.wav
             output/subtitles.srt
-            output/background.png
+            output/scene-*.png
+            output/scene-video-*.mp4
           if-no-files-found: error
           retention-days: 7
+
