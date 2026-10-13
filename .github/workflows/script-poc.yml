@@ -21,16 +21,24 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Check out project
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+
+      - name: Cache Ollama model
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/ollama-models
+          key: ollama-${{ runner.os }}-qwen2.5-1.5b-v1
 
       - name: Install Ollama and load the open model
         shell: bash
         run: |
+          export OLLAMA_MODELS="$RUNNER_TEMP/ollama-models"
+          mkdir -p "$OLLAMA_MODELS"
           curl -fsSL https://ollama.com/install.sh | sh
           ollama serve > "$RUNNER_TEMP/ollama.log" 2>&1 &
           for attempt in {1..60}; do
@@ -50,10 +58,11 @@ jobs:
           VIDEO_TITLE: ${{ inputs.title }}
           SOURCE_NOTES: ${{ inputs.source_notes }}
           OLLAMA_MODEL: qwen2.5:1.5b
+          OLLAMA_MODELS: ${{ runner.temp }}/ollama-models
         run: python -m factory.run_script_poc
 
       - name: Save draft for review
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: script-draft
           path: output/script-draft.md
