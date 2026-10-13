@@ -275,9 +275,15 @@ def render_video(script_path, title, output_dir):
         duration = max(1.5, duration)
         clip_path = output_dir / f"scene-video-{index + 1:02}.mp4"
         zoom = "min(zoom+0.00035,1.07)" if index % 2 == 0 else "max(zoom-0.00025,1.0)"
+        animated_filter = (
+            f"zoompan=z='{zoom}':d=1:s={WIDTH}x{HEIGHT}:fps={FPS},trim=duration={duration:.3f},setpts=PTS-STARTPTS,"
+            "drawbox=x='mod(70+t*85,680)':y='475+70*sin(t*1.8)':w=16:h=16:color=0x57D9FF@0.95:t=fill,"
+            "drawbox=x='mod(640-t*62,680)':y='620+85*cos(t*1.4)':w=12:h=12:color=0xFFC45B@0.95:t=fill,"
+            "drawbox=x='mod(220+t*48,680)':y='770+55*sin(t*2.2)':w=10:h=10:color=0x9BFFD0@0.95:t=fill"
+        )
         _run([
             "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-loop", "1", "-framerate", str(FPS),
-            "-i", str(image_path), "-vf", f"zoompan=z='{zoom}':d=1:s={WIDTH}x{HEIGHT}:fps={FPS},trim=duration={duration:.3f},setpts=PTS-STARTPTS",
+            "-i", str(image_path), "-vf", animated_filter,
             "-an", "-c:v", "libx264", "-preset", "ultrafast", "-tune", "stillimage", "-crf", "24", "-pix_fmt", "yuv420p",
             "-r", str(FPS), "-movflags", "+faststart", str(clip_path),
         ], step_name=f"تحريك المشهد {index + 1}")
