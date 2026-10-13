@@ -18,12 +18,14 @@ def generate_script(title, source_notes, *, model="qwen2.5:1.5b", base_url="http
     if not source_notes:
         raise ScriptGenerationError("أضف ملاحظات أو روابط المصادر قبل توليد المسودة.")
 
-    prompt = f"""اكتب مسودة إلقاء لفيديو قصير مدته 45 إلى 60 ثانية بالعربية الفصحى المبسطة.
+    prompt = f"""اكتب نص إلقاء لفيديو قصير مدته 45 إلى 60 ثانية بالعربية الفصحى المبسطة.
 الفكرة: {title}
 المعلومات والمصادر المقدمة:
 {source_notes}
 
 قواعد التحرير:
+- اجعل نص الإلقاء نفسه بين 80 و100 كلمة عربية، ولا تتجاوز 100 كلمة قبل قسم المصادر.
+- اختصر إلى الفكرة الأهم فقط؛ جمل قصيرة ومباشرة تناسب ريلز مدته دقيقة.
 - ابنِ النص على المعلومات المقدمة فقط، ولا تخترع حقائق أو أرقامًا أو مراجع.
 - ابدأ بخطاف موجز، ثم اشرح الفكرة بوضوح، واختم بسؤال أو خلاصة.
 - إذا لم تدعم المصادر ادعاءً ما، اكتب بجواره [يحتاج تحققًا] بدل صياغته كحقيقة.
@@ -32,7 +34,12 @@ def generate_script(title, source_notes, *, model="qwen2.5:1.5b", base_url="http
 
     request = Request(
         f"{base_url.rstrip('/')}/api/generate",
-        data=json.dumps({"model": model, "prompt": prompt, "stream": False}, ensure_ascii=False).encode("utf-8"),
+        data=json.dumps({
+            "model": model,
+            "prompt": prompt,
+            "stream": False,
+            "options": {"num_predict": 320},
+        }, ensure_ascii=False).encode("utf-8"),
         headers={"Content-Type": "application/json"},
         method="POST",
     )
@@ -52,3 +59,4 @@ def generate_script(title, source_notes, *, model="qwen2.5:1.5b", base_url="http
     if not isinstance(result, str) or not result.strip():
         raise ScriptGenerationError("أعاد النموذج نصًا فارغًا.")
     return result.strip()
+
